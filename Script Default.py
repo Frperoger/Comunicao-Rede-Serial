@@ -11,8 +11,7 @@ from datetime import datetime
 HOST = "0.0.0.0"
 PORT = 8899
 
-BASE_DIR = r"I:\\Servidor_CNC's"
-
+BASE_DIR = r""#Caminho aonde a pasta será criada
 PASTA_ENVIAR = os.path.join(BASE_DIR, "ENVIAR")
 PASTA_RECEBER = os.path.join(BASE_DIR, "RECEBER")
 PASTA_LOG = os.path.join(BASE_DIR, "LOG")
@@ -22,12 +21,12 @@ XOFF = b'\x13'
 #Sepração de máquina por IP
 #Transferencia de programa
 MAQUINA_POR_IP = {
-    "192.168.0.8": "CNC01 Gabriel",
-    "192.168.0.9": "CNC02 Anderson",
-    "192.168.0.10": "Galaxy20 Robson",
+    "192.168.0.8": "CNC01",
+    "192.168.0.9": "CNC02",
+    "192.168.0.10": "Galaxy20",
     "192.168.0.11": "G240",
-    "192.168.0.30": "Galaxy50 Nairson",
-    "192.168.0.13": "Multiplic35D Wesley",
+    "192.168.0.12": "Galaxy50",
+    "192.168.0.13": "Multiplic35D",
 }
 #Direto da rede
 #Handshakes padrão
@@ -234,12 +233,12 @@ def dnc_loop():
 
 # máquinas fixas
 NOMES_MAQUINAS = [
-    "CNC01 Gabriel",
-    "CNC02 Anderson",
-    "Galaxy20 Robson",
+    "CNC01",
+    "CNC02",
+    "Galaxy20,
     "G240",
-    "Galaxy50 Nairson",
-    "Multiplic35D Wesley",
+    "Galaxy50,
+    "Multiplic35D",
 ]
 
 maquinas = {}
@@ -363,4 +362,5 @@ threading.Thread(target=monitor_timeout, daemon=True).start()
 root.after(200, atualizar_gui)
 
 threading.Thread(target=dnc_loop, daemon=True).start()
+
 root.mainloop()
