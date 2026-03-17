@@ -118,6 +118,8 @@ def atender_conexao(conn, addr):
     buffer = b""
     handshake_pendente = None
     ignorar_antes_do_comando = {b"\x00", b"\r", b"\n", XON, XOFF}
+    modo_conexao = None  # None | "ENVIO_PC_CNC" | "RECEPCAO_CNC_PC"
+    ignorar_inicial = {b"\x00", b"\r", b"\n", XON, XOFF}
 
     maquina = MAQUINA_POR_IP.get(ip, "DESCONHECIDA")
     if maquina in maquinas:
@@ -140,6 +142,7 @@ def atender_conexao(conn, addr):
                 log("Arquivo removido após envio", maquina)
                 maquina_atividade(maquina, "Repouso")
                 maquina_Online(maquina, ip)
+            maquina_Online(maquina, ip)
             estado = "IDLE"
             return
 
@@ -159,6 +162,8 @@ def atender_conexao(conn, addr):
                 maquina_atividade(maquina, "Repouso")
             estado = "IDLE"
             maquina_Online(maquina, ip)
+            maquina_Online(maquina, ip)
+            estado = "IDLE"
 
     try:
         while True:
@@ -167,6 +172,7 @@ def atender_conexao(conn, addr):
                 data = conn.recv(4096)
             except socket.timeout:
                 if handshake_pendente is not None and estado == "IDLE" and maquina != "DESCONHECIDA":
+                if handshake_pendente and estado == "IDLE" and maquina != "DESCONHECIDA":
                     executar_handshake(handshake_pendente)
                     handshake_pendente = None
                 if maquina in maquinas:
@@ -179,6 +185,7 @@ def atender_conexao(conn, addr):
             for byte in data:
                 b = bytes([byte])
 
+                # ===================== IDLE =====================
                 if estado == "IDLE":
                     if maquina == "DESCONHECIDA":
                         log(f"IP não mapeado: {ip}", "GERAL")
@@ -202,11 +209,33 @@ def atender_conexao(conn, addr):
                             continue
                         executar_handshake(handshake_pendente)
                         handshake_pendente = None
+                    # definição do modo da conexão pelo primeiro comando útil
+                    if modo_conexao is None:
+                        if b in ignorar_inicial:
+                            continue
+                        if b == b"%":
+                            modo_conexao = "RECEPCAO_CNC_PC"
+                            buffer = b"%"
+                            estado = "RECEBENDO"
+                            continue
+                        if b in HANDSHAKE_NORMAL or b in HANDSHAKE_DNC:
+                            modo_conexao = "ENVIO_PC_CNC"
+                            executar_handshake(b)
+                            continue
+                        continue
+
+                    if modo_conexao == "RECEPCAO_CNC_PC":
                         if b == b"%":
                             buffer = b"%"
                             estado = "RECEBENDO"
                         continue
 
+                    if modo_conexao == "ENVIO_PC_CNC":
+                        if b in HANDSHAKE_NORMAL or b in HANDSHAKE_DNC:
+                            executar_handshake(b)
+                        continue
+
+                # ===================== RECEBENDO =====================
                 elif estado == "RECEBENDO":
                     maquina_Online(maquina)
                     if not recebendo:
@@ -229,6 +258,7 @@ def atender_conexao(conn, addr):
                         maquina_atividade(maquina, "Repouso")
                     continue
 
+                # ===================== ENVIANDO / DNC =====================
                 elif estado in ("ENVIANDO", "DNC"):
                     continue
 
