@@ -115,18 +115,60 @@ def atender_conexao(conn, addr):
     print("Socket Conectado:", ip)
     log(f"Conectado: {addr}")
     estado = "IDLE"
-    aguardando_primeiro_comando = True
     buffer = b""
+    handshake_pendente = None
+    ignorar_antes_do_comando = {b"\x00", b"\r", b"\n", XON, XOFF}
+
     maquina = MAQUINA_POR_IP.get(ip, "DESCONHECIDA")
     if maquina in maquinas:
-        maquina_Online(maquina,ip)
+        maquina_Online(maquina, ip)
     log_geral_evento(maquina, ip, "CONEXÃO INICIADA")
+
+    def executar_handshake(handshake):
+        nonlocal estado
+        if handshake in HANDSHAKE_NORMAL:
+            maquina_conectada(maquina, ip)
+            pasta = os.path.join(PASTA_ENVIAR, maquina)
+            log("Handshake NORMAL recebido", maquina)
+            caminho = pegar_arquivo(pasta)
+            if caminho:
+                estado = "ENVIANDO"
+                maquina_atividade(maquina, "Enviando")
+                enviar_normal(conn, caminho, maquina)
+                maquina_atividade(maquina, "Repouso")
+                os.remove(caminho)
+                log("Arquivo removido após envio", maquina)
+                maquina_atividade(maquina, "Repouso")
+                maquina_Online(maquina, ip)
+            estado = "IDLE"
+            return
+
+        if handshake in HANDSHAKE_DNC:
+            with lock:
+                maquinas[maquina]["status"] = "Handshake_DNC"
+                maquinas[maquina]["atividade"] = "Repouso"
+                maquinas[maquina]["ip"] = ip
+                maquinas[maquina]["last_seen"] = time.time()
+            pasta = os.path.join(PASTA_ENVIAR, maquina)
+            log("Handshake DNC recebido", maquina)
+            caminho = pegar_arquivo(pasta)
+            if caminho:
+                estado = "DNC"
+                maquina_atividade(maquina, "Usinando")
+                enviar_dnc(conn, caminho, maquina)
+                maquina_atividade(maquina, "Repouso")
+            estado = "IDLE"
+            maquina_Online(maquina, ip)
+
     try:
         while True:
-            Recebendo = False
+            recebendo = False
             try:
                 data = conn.recv(4096)
             except socket.timeout:
+                if handshake_pendente is not None and estado == "IDLE" and maquina != "DESCONHECIDA":
+                    executar_handshake(handshake_pendente)
+                    handshake_pendente = None
                 if maquina in maquinas:
                     maquina_Online(maquina)
                 continue
@@ -136,65 +178,41 @@ def atender_conexao(conn, addr):
 
             for byte in data:
                 b = bytes([byte])
-                # ===================== IDLE =====================
+
                 if estado == "IDLE":
                     if maquina == "DESCONHECIDA":
                         log(f"IP não mapeado: {ip}", "GERAL")
                         continue
-                    # --- HANDSHAKE NORMAL ---
-                    if aguardando_primeiro_comando and b in HANDSHAKE_NORMAL:
-                        maquina_conectada(maquina, ip)
-                        pasta = os.path.join(PASTA_ENVIAR, maquina)
-                        log("Handshake NORMAL recebido", maquina)
-                        caminho = pegar_arquivo(pasta)
-                        if caminho:
-                            estado = "ENVIANDO"
-                            maquina_atividade(maquina, "Enviando")
-                            enviar_normal(conn, caminho, maquina)
-                            maquina_atividade(maquina, "Repouso")
-                            os.remove(caminho)
-                            log("Arquivo removido após envio", maquina)
-                            maquina_atividade(maquina, "Repouso")
-                            maquina_Online(maquina,ip)
-                        aguardando_primeiro_comando = False
-                        estado = "IDLE"
-                        continue
-                    # --- HANDSHAKE DNC ---
-                    if aguardando_primeiro_comando and b in HANDSHAKE_DNC:
-                        with lock:
-                            maquinas[maquina]["status"] = "Handshake_DNC"
-                            maquinas[maquina]["atividade"] = "Repouso"
-                            maquinas[maquina]["ip"] = ip
-                            maquinas[maquina]["last_seen"] = time.time()
-                        pasta = os.path.join(PASTA_ENVIAR, maquina)
-                        log("Handshake DNC recebido", maquina)
-                        caminho = pegar_arquivo(pasta)
-                        if caminho:
-                            estado = "DNC"
-                            maquina_atividade(maquina, "Usinando")
-                            enviar_dnc(conn, caminho, maquina)
-                            maquina_atividade(maquina, "Repouso")
-                        aguardando_primeiro_comando = False
-                        estado = "IDLE"
-                        maquina_Online(maquina,ip)
-                        continue
-                    # --- INICIO RECEPÇÃO CNC -> PC ---
+
+                    # Prioridade total para recepção CNC -> PC
                     if b == b"%":
+                        handshake_pendente = None
                         buffer = b"%"
-                        aguardando_primeiro_comando = False
                         estado = "RECEBENDO"
                         continue
-                    if b not in (b"\x00", b"\r", b"\n"):
-                        aguardando_primeiro_comando = False
-                        if b in HANDSHAKE_NORMAL or b in HANDSHAKE_DNC:
-                            log("Handshake ignorado fora do início da conexão", maquina)
-                # ===================== RECEBENDO =====================
+
+                    # Recebeu possível handshake, mantém pendente até confirmação
+                    if b in HANDSHAKE_NORMAL or b in HANDSHAKE_DNC:
+                        if handshake_pendente is None:
+                            handshake_pendente = b
+                        continue
+
+                    if handshake_pendente is not None:
+                        if b in ignorar_antes_do_comando:
+                            continue
+                        executar_handshake(handshake_pendente)
+                        handshake_pendente = None
+                        if b == b"%":
+                            buffer = b"%"
+                            estado = "RECEBENDO"
+                        continue
+
                 elif estado == "RECEBENDO":
                     maquina_Online(maquina)
-                    if not Recebendo:
+                    if not recebendo:
                         maquina_atividade(maquina, "Recebendo")
                         root.update_idletasks()
-                        Recebendo = True
+                        recebendo = True
                     buffer += b
                     if b == b"%":
                         nome = datetime.now().strftime(
@@ -207,12 +225,11 @@ def atender_conexao(conn, addr):
                         log_geral_evento(maquina, ip, f"RECEBIDO ({nome})")
                         buffer = b""
                         estado = "IDLE"
-                        Recebendo = False
+                        recebendo = False
                         maquina_atividade(maquina, "Repouso")
                     continue
-                # ===================== ENVIANDO / DNC =====================
+
                 elif estado in ("ENVIANDO", "DNC"):
-                    # Ignora qualquer dado recebido durante envio
                     continue
 
     except Exception as e:
