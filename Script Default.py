@@ -115,6 +115,7 @@ def atender_conexao(conn, addr):
     print("Socket Conectado:", ip)
     log(f"Conectado: {addr}")
     estado = "IDLE"
+    aguardando_primeiro_comando = True
     buffer = b""
     maquina = MAQUINA_POR_IP.get(ip, "DESCONHECIDA")
     if maquina in maquinas:
@@ -141,7 +142,7 @@ def atender_conexao(conn, addr):
                         log(f"IP não mapeado: {ip}", "GERAL")
                         continue
                     # --- HANDSHAKE NORMAL ---
-                    if b in HANDSHAKE_NORMAL:
+                    if aguardando_primeiro_comando and b in HANDSHAKE_NORMAL:
                         maquina_conectada(maquina, ip)
                         pasta = os.path.join(PASTA_ENVIAR, maquina)
                         log("Handshake NORMAL recebido", maquina)
@@ -155,10 +156,11 @@ def atender_conexao(conn, addr):
                             log("Arquivo removido após envio", maquina)
                             maquina_atividade(maquina, "Repouso")
                             maquina_Online(maquina,ip)
+                        aguardando_primeiro_comando = False
                         estado = "IDLE"
                         continue
                     # --- HANDSHAKE DNC ---
-                    if b in HANDSHAKE_DNC:
+                    if aguardando_primeiro_comando and b in HANDSHAKE_DNC:
                         with lock:
                             maquinas[maquina]["status"] = "Handshake_DNC"
                             maquinas[maquina]["atividade"] = "Repouso"
@@ -172,14 +174,20 @@ def atender_conexao(conn, addr):
                             maquina_atividade(maquina, "Usinando")
                             enviar_dnc(conn, caminho, maquina)
                             maquina_atividade(maquina, "Repouso")
+                        aguardando_primeiro_comando = False
                         estado = "IDLE"
                         maquina_Online(maquina,ip)
                         continue
                     # --- INICIO RECEPÇÃO CNC -> PC ---
                     if b == b"%":
                         buffer = b"%"
+                        aguardando_primeiro_comando = False
                         estado = "RECEBENDO"
                         continue
+                    if b not in (b"\x00", b"\r", b"\n"):
+                        aguardando_primeiro_comando = False
+                        if b in HANDSHAKE_NORMAL or b in HANDSHAKE_DNC:
+                            log("Handshake ignorado fora do início da conexão", maquina)
                 # ===================== RECEBENDO =====================
                 elif estado == "RECEBENDO":
                     maquina_Online(maquina)
@@ -235,9 +243,9 @@ def dnc_loop():
 NOMES_MAQUINAS = [
     "CNC01",
     "CNC02",
-    "Galaxy20,
+    "Galaxy20",
     "G240",
-    "Galaxy50,
+    "Galaxy50",
     "Multiplic35D",
 ]
 
