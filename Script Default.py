@@ -116,6 +116,8 @@ def atender_conexao(conn, addr):
     log(f"Conectado: {addr}")
     estado = "IDLE"
     buffer = b""
+    handshake_pendente = None
+    ignorar_antes_do_comando = {b"\x00", b"\r", b"\n", XON, XOFF}
     modo_conexao = None  # None | "ENVIO_PC_CNC" | "RECEPCAO_CNC_PC"
     ignorar_inicial = {b"\x00", b"\r", b"\n", XON, XOFF}
 
@@ -138,6 +140,8 @@ def atender_conexao(conn, addr):
                 maquina_atividade(maquina, "Repouso")
                 os.remove(caminho)
                 log("Arquivo removido após envio", maquina)
+                maquina_atividade(maquina, "Repouso")
+                maquina_Online(maquina, ip)
             maquina_Online(maquina, ip)
             estado = "IDLE"
             return
@@ -156,6 +160,8 @@ def atender_conexao(conn, addr):
                 maquina_atividade(maquina, "Usinando")
                 enviar_dnc(conn, caminho, maquina)
                 maquina_atividade(maquina, "Repouso")
+            estado = "IDLE"
+            maquina_Online(maquina, ip)
             maquina_Online(maquina, ip)
             estado = "IDLE"
 
@@ -165,6 +171,7 @@ def atender_conexao(conn, addr):
             try:
                 data = conn.recv(4096)
             except socket.timeout:
+                if handshake_pendente is not None and estado == "IDLE" and maquina != "DESCONHECIDA":
                 if handshake_pendente and estado == "IDLE" and maquina != "DESCONHECIDA":
                     executar_handshake(handshake_pendente)
                     handshake_pendente = None
@@ -184,6 +191,24 @@ def atender_conexao(conn, addr):
                         log(f"IP não mapeado: {ip}", "GERAL")
                         continue
 
+                    # Prioridade total para recepção CNC -> PC
+                    if b == b"%":
+                        handshake_pendente = None
+                        buffer = b"%"
+                        estado = "RECEBENDO"
+                        continue
+
+                    # Recebeu possível handshake, mantém pendente até confirmação
+                    if b in HANDSHAKE_NORMAL or b in HANDSHAKE_DNC:
+                        if handshake_pendente is None:
+                            handshake_pendente = b
+                        continue
+
+                    if handshake_pendente is not None:
+                        if b in ignorar_antes_do_comando:
+                            continue
+                        executar_handshake(handshake_pendente)
+                        handshake_pendente = None
                     # definição do modo da conexão pelo primeiro comando útil
                     if modo_conexao is None:
                         if b in ignorar_inicial:
