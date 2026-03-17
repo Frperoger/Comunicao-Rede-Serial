@@ -165,6 +165,9 @@ def atender_conexao(conn, addr):
             try:
                 data = conn.recv(4096)
             except socket.timeout:
+                if handshake_pendente and estado == "IDLE" and maquina != "DESCONHECIDA":
+                    executar_handshake(handshake_pendente)
+                    handshake_pendente = None
                 if maquina in maquinas:
                     maquina_Online(maquina)
                 continue
