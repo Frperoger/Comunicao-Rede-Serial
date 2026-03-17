@@ -116,8 +116,8 @@ def atender_conexao(conn, addr):
     log(f"Conectado: {addr}")
     estado = "IDLE"
     buffer = b""
-    handshake_pendente = None
-    ignorar_antes_do_comando = {b"\x00", b"\r", b"\n", XON, XOFF}
+    modo_conexao = None  # None | "ENVIO_PC_CNC" | "RECEPCAO_CNC_PC"
+    ignorar_inicial = {b"\x00", b"\r", b"\n", XON, XOFF}
 
     maquina = MAQUINA_POR_IP.get(ip, "DESCONHECIDA")
     if maquina in maquinas:
@@ -138,7 +138,6 @@ def atender_conexao(conn, addr):
                 maquina_atividade(maquina, "Repouso")
                 os.remove(caminho)
                 log("Arquivo removido após envio", maquina)
-                maquina_atividade(maquina, "Repouso")
             maquina_Online(maquina, ip)
             estado = "IDLE"
             return
@@ -162,7 +161,7 @@ def atender_conexao(conn, addr):
 
     try:
         while True:
-            Recebendo = False
+            recebendo = False
             try:
                 data = conn.recv(4096)
             except socket.timeout:
@@ -178,41 +177,46 @@ def atender_conexao(conn, addr):
 
             for byte in data:
                 b = bytes([byte])
+
                 # ===================== IDLE =====================
                 if estado == "IDLE":
                     if maquina == "DESCONHECIDA":
                         log(f"IP não mapeado: {ip}", "GERAL")
                         continue
 
-                    # --- INICIO RECEPÇÃO CNC -> PC (prioridade) ---
-                    if b == b"%":
-                        handshake_pendente = None
-                        buffer = b"%"
-                        estado = "RECEBENDO"
-                        continue
-
-                    # --- HANDSHAKE pendente para evitar falso positivo ---
-                    if b in HANDSHAKE_NORMAL or b in HANDSHAKE_DNC:
-                        if handshake_pendente is None:
-                            handshake_pendente = b
-                        continue
-
-                    if handshake_pendente is not None:
-                        if b in ignorar_antes_do_comando:
+                    # definição do modo da conexão pelo primeiro comando útil
+                    if modo_conexao is None:
+                        if b in ignorar_inicial:
                             continue
-                        executar_handshake(handshake_pendente)
-                        handshake_pendente = None
                         if b == b"%":
+                            modo_conexao = "RECEPCAO_CNC_PC"
                             buffer = b"%"
                             estado = "RECEBENDO"
                             continue
+                        if b in HANDSHAKE_NORMAL or b in HANDSHAKE_DNC:
+                            modo_conexao = "ENVIO_PC_CNC"
+                            executar_handshake(b)
+                            continue
+                        continue
+
+                    if modo_conexao == "RECEPCAO_CNC_PC":
+                        if b == b"%":
+                            buffer = b"%"
+                            estado = "RECEBENDO"
+                        continue
+
+                    if modo_conexao == "ENVIO_PC_CNC":
+                        if b in HANDSHAKE_NORMAL or b in HANDSHAKE_DNC:
+                            executar_handshake(b)
+                        continue
+
                 # ===================== RECEBENDO =====================
                 elif estado == "RECEBENDO":
                     maquina_Online(maquina)
-                    if not Recebendo:
+                    if not recebendo:
                         maquina_atividade(maquina, "Recebendo")
                         root.update_idletasks()
-                        Recebendo = True
+                        recebendo = True
                     buffer += b
                     if b == b"%":
                         nome = datetime.now().strftime(
@@ -225,12 +229,12 @@ def atender_conexao(conn, addr):
                         log_geral_evento(maquina, ip, f"RECEBIDO ({nome})")
                         buffer = b""
                         estado = "IDLE"
-                        Recebendo = False
+                        recebendo = False
                         maquina_atividade(maquina, "Repouso")
                     continue
+
                 # ===================== ENVIANDO / DNC =====================
                 elif estado in ("ENVIANDO", "DNC"):
-                    # Ignora qualquer dado recebido durante envio
                     continue
 
     except Exception as e:
